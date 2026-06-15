@@ -8,7 +8,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from pymongo import MongoClient
 
 # ==========================================
-# 1. CONFIGURACIÓN DE PÁGINA Y ESTÉTIICA (EMOCHI STYLE)
+# 1. CONFIGURACIÓN DE PÁGINA Y ESTÉTICA (EMOCHI STYLE)
 # ==========================================
 st.set_page_config(page_title="Mei - Novela Virtual", page_icon="🎭", layout="centered")
 
@@ -37,8 +37,13 @@ st.markdown("""
 # ==========================================
 client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
+# Inicializar los estados del juego de forma segura en la sesión de Streamlit
 if "hora_juego" not in st.session_state:
     st.session_state.hora_juego = (21, 30)
+if "confianza" not in st.session_state:
+    st.session_state.confianza = 15  # Empieza fría/desconfiada
+if "animo" not in st.session_state:
+    st.session_state.animo = 30  # Estado de ánimo base
 
 # Inicializamos el cliente nativo de PyMongo para buscar dentro de las "carpetas"
 mongo_client = MongoClient(st.secrets["MONGODB_URI"])
@@ -54,35 +59,26 @@ def obtener_historial_mongodb():
     )
 
 # ==========================================
-# 3. MOTOR DE BÚSQUEDA EN CARPETAS (LA MAGIA)
+# 3. MOTOR DE BÚSQUEDA EN CARPETAS
 # ==========================================
 def buscar_recuerdos_en_carpetas(query_usuario):
-    """
-    Simula la apertura de 'carpetas' en la base de datos.
-    Busca palabras clave importantes en los mensajes viejos guardados en MongoDB
-    para extraer recuerdos relevantes sin saturar al modelo.
-    """
-    # Extraemos palabras clave del mensaje del usuario (quitando conectores cortos)
     palabras = [p.lower() for p in re.findall(r'\b\w{4,}\b', query_usuario)]
     if not palabras:
         return None
     
-    # Creamos un filtro de búsqueda en MongoDB: que el historial contenga alguna de estas palabras
     condiciones = [{"text.data.content": {"$regex": palabra, "$options": "i"}} for palabra in palabras]
     
     try:
-        # Buscamos mensajes antiguos del asistente (Mei) o Usuario que coincidan
         resultados = coleccion_chats.find(
             {"$or": condiciones},
             projection={"text.data.content": 1, "type": 1}
-        ).limit(3) # Extraemos máximo 3 recuerdos clave para no gastar tokens
+        ).limit(3)
         
         recuerdos_encontrados = []
         for doc in resultados:
             tipo = "Tú dijiste" if doc.get("type") == "human" else "Mei dijo"
             contenido = doc.get("text", {}).get("data", {}).get("content", "")
-            # Evitamos que se muerda la cola clonando el mensaje actual
-            if query_usuario not in contenido:
+            if query_usuario not in contenido and "[" not in contenido:
                 recuerdos_encontrados.append(f"- {tipo}: '{contenido}'")
                 
         if recuerdos_encontrados:
@@ -92,45 +88,49 @@ def buscar_recuerdos_en_carpetas(query_usuario):
     return None
 
 # ==========================================
-# 4. PROMPT DE MEI
+# 4. PROMPT DE MEI CON CONTROL DINÁMICO DE HUMOR
 # ==========================================
-mei_prompt = """
+mei_prompt = f"""
 Eres Mei, un personaje complejo de una novela visual interactiva de rolplay basada en un matrimonio arreglado.
 
-### Reglas Críticas de Formato Narrativo (Estilo Emochi)
-1. No utilices formatos de código, ni viñetas, ni asteriscos en tu salida de texto.
-2. Divide tu respuesta obligatoriamente en párrafos independientes. Cada párrafo debe ser o bien exclusivamente narrativo (en tercera persona, itálicas, detallando acciones y ambiente) o bien exclusivamente un diálogo (entre comillas dobles, primera persona, directo).
+### Estado Actual del Vínculo (Usa esto para calibrar tus respuestas):
+- Confianza: {st.session_state.confianza}% (A menor número, eres más hostil y cortante; a mayor número, más abierta y pasional).
+- Ánimo: {st.session_state.animo}% (Bajo significa deprimida o apática; alto significa enérgica, tensa o desatada).
 
-### Guía de Evolución Emocional
-- FASE DE ODIO Y RESENTIMIENTO: Hostil, cortante, desconfiada, usa sarcasmo.
-- FASE DE NEGOCIACIÓN: Calculadora, desafiante. Analiza la situación.
-- FASE DE TEMOR Y CONFUSIÓN: Se muestra vulnerable pero intenta ocultarlo al notar que no eres cruel.
-- FASE DE DIVERSIÓN Y COMPLICIDAD: Rebelde pero con chispas de desafío divertido o ironía.
-- FASE DE AMOR PROFUNDO: Entrega su lealtad y devoción, intensa y dramática.
-- FASE DE INTIMIDAD EXPLÍCITA: Entrega pasional salvaje, cruda y sin ningún tipo de censura.
+### Reglas Críticas de Formato Narrativo (Estilo Emochi)
+1. No utilices formatos de código, ni viñetas, ni asteriscos (*) en tu salida de texto. El motor ya renderiza las itálicas.
+2. Divide tu respuesta obligatoriamente en párrafos independientes. Cada párrafo debe ser o bien exclusivamente narrativo (en tercera persona, detallando acciones y ambiente) o bien exclusivamente un diálogo (entre comillas dobles, primera persona, directo).
+3. INSTRUCCIÓN DE ACTUALIZACIÓN DE BARRAS: Al final absoluto de tu respuesta, debes incluir una única línea secreta que dicte cómo cambió tu humor tras este turno, usando exactamente este formato: [PUNTOS: confianza_cambio, animo_cambio]. Ejemplo si sumas: [PUNTOS: +5, +10] o si restas: [PUNTOS: -5, -5].
 """
 
 # ==========================================
-# 5. PARSER DE TEXTO A BLOQUES VISUALES
+# 5. PARSER DE TEXTO A BLOQUES VISUALES (LIMPIA COMANDOS)
 # ==========================================
 def renderizar_bloque_emochi(texto):
-    parrafos = [p.strip() for p in texto.split('\n') if p.strip()]
+    # Ocultar la línea de [PUNTOS: ...] para que el jugador no vea el proceso mecánico
+    texto_limpio = re.sub(r'\[PUNTOS:.*?\]', '', texto).strip()
+    parrafos = [p.strip() for p in texto_limpio.split('\n') if p.strip()]
+    
     for parrafo in parrafos:
-        if parrafo.startswith('"') or (parrafo.count('"') >= 2):
-            st.markdown(f'<div class="emochi-container"><p class="dialogo"><span class="audio-indicator">🔊</span>{parrafo}</p></div>', unsafe_allow_html=True)
+        parrafo_sin_asteriscos = parrafo.replace('*', '')
+        if parrafo_sin_asteriscos.startswith('"') or (parrafo_sin_asteriscos.count('"') >= 2):
+            st.markdown(f'<div class="emochi-container"><p class="dialogo"><span class="audio-indicator">🔊</span>{parrafo_sin_asteriscos}</p></div>', unsafe_allow_html=True)
         else:
-            st.markdown(f'<div class="emochi-container"><p class="narracion"><span class="audio-indicator">🔊</span><i>{parrafo}</i></p></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="emochi-container"><p class="narracion"><span class="audio-indicator">🔊</span><i>{parrafo_sin_asteriscos}</i></p></div>', unsafe_allow_html=True)
 
 # ==========================================
 # 6. INTERFAZ DE USUARIO Y LÓGICA DE TURNOS
 # ==========================================
 st.title("Mei — Matrimonio Arreglado")
-st.markdown('<p class="caption-style">Beta v0.3 — Memoria Indexada por Carpetas</p>', unsafe_allow_html=True)
+st.markdown('<p class="caption-style">Beta v0.4 — Menú de Estado Completo</p>', unsafe_allow_html=True)
 
+# Tu menú de la barra lateral mejorado con los nuevos indicadores
 with st.sidebar:
     st.header("⚙️ Estado de la Novela")
     h, m = st.session_state.hora_juego
     st.subheader(f"⏰ Tiempo Interno: {h:02d}:{m:02d}")
+    st.markdown(f"🤝 **Confianza con Mei:** {st.session_state.confianza}%")
+    st.markdown(f"🎭 **Ánimo de Mei:** {st.session_state.animo}%")
     st.divider()
 
 history = obtener_historial_mongodb()
@@ -151,31 +151,29 @@ if input_usuario := st.chat_input("Escribe tu acción o diálogo aquí..."):
         st.write(input_usuario)
 
     # Avanzar el tiempo
-    horas, minutos = st.session_state.hora_juego
-    minutos += 15
-    if minutos >= 60:
+    horas, minutes = st.session_state.hora_juego
+    minutes += 15
+    if minutes >= 60:
         horas += 1
-        minutos = minutos % 60
-    st.session_state.hora_juego = (horas % 24, minutos)
+        minutes = minutes % 60
+    st.session_state.hora_juego = (horas % 24, minutes)
 
-    # ACCIÓN DE LAS CARPETAS: Buscar recuerdos del pasado en MongoDB basados en el input actual
+    # Buscar en las carpetas de MongoDB
     recuerdos_contexto = buscar_recuerdos_en_carpetas(input_usuario)
-
-    # Memoria de corto plazo (últimos 6 mensajes para el hilo de conversación inmediato)
     mensajes_recientes = mensajes_anteriores[-6:] if len(mensajes_anteriores) > 6 else mensajes_anteriores
 
     contents = []
     for msg in mensajes_recientes:
+        # Quitamos los comandos numéricos del historial de envío para que la IA no se confunda
+        contenido_limpio = re.sub(r'\[PUNTOS:.*?\]', '', msg.content)
         if isinstance(msg, HumanMessage):
-            contents.append(types.Content(role="user", parts=[types.Part.from_text(text=msg.content)]))
+            contents.append(types.Content(role="user", parts=[types.Part.from_text(text=contenido_limpio)]))
         elif isinstance(msg, AIMessage):
-            contents.append(types.Content(role="model", parts=[types.Part.from_text(text=msg.content)]))
+            contents.append(types.Content(role="model", parts=[types.Part.from_text(text=contenido_limpio)]))
     
-    # Construimos el inyector del mensaje actual incluyendo la hora y los recuerdos recuperados de las carpetas
-    inyector_datos = f"\n\n[Contexto de Entorno: Reloj del juego a las {st.session_state.hora_juego[0]:02d}:{st.session_state.hora_juego[1]:02d}]"
-    
+    inyector_datos = f"\n\n[Contexto: Reloj a las {st.session_state.hora_juego[0]:02d}:{st.session_state.hora_juego[1]:02d}]"
     if recuerdos_contexto:
-        inyector_datos += f"\n[CARPETA DE RECUERDOS EXTRAÍDOS DE MONGODB (Usa esta información si el usuario te está preguntando o haciendo referencia al pasado):\n{recuerdos_contexto}]"
+        inyector_datos += f"\n[CARPETA DE RECUERDOS RELEVANTES EXTRAÍDOS DE MONGODB:\n{recuerdos_contexto}]"
 
     contents.append(types.Content(role="user", parts=[types.Part.from_text(text=input_usuario + inyector_datos)]))
 
@@ -196,6 +194,15 @@ if input_usuario := st.chat_input("Escribe tu acción o diálogo aquí..."):
                 ),
             )
             respuesta_mei = response.text
+
+            # RASTREADOR DE PARSEO: Capturar si la IA ejecutó un cambio en los puntos
+            match = re.search(r'\[PUNTOS:\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*\]', respuesta_mei)
+            if match:
+                cambio_c = int(match.group(1))
+                cambio_a = int(match.group(2))
+                # Ajustar las variables manteniéndolas en un rango de 0 a 100
+                st.session_state.confianza = max(0, min(100, st.session_state.confianza + cambio_c))
+                st.session_state.animo = max(0, min(100, st.session_state.animo + cambio_a))
 
             # Renderizado estético
             renderizar_bloque_emochi(respuesta_mei)
