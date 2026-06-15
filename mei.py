@@ -1,17 +1,50 @@
 import os
+import re
 import streamlit as st
 from google import genai
 from google.genai import types
 from langchain_mongodb.chat_message_histories import MongoDBChatMessageHistory
 from langchain_core.messages import HumanMessage, AIMessage
+from pymongo import MongoClient
 
 # ==========================================
-# 1. CONFIGURACIÓN DE APIS Y BASE DE DATOS (SEGUROS)
+# 1. CONFIGURACIÓN DE PÁGINA Y ESTÉTIICA (EMOCHI STYLE)
 # ==========================================
-# El cliente lee la API Key oculta desde los secretos de Streamlit
+st.set_page_config(page_title="Mei - Novela Virtual", page_icon="🎭", layout="centered")
+
+st.markdown("""
+    <style>
+    .stApp { background-color: #121212; color: #E0E0E0; }
+    h1 { color: #FFFFFF; font-family: 'Georgia', serif; text-align: center; margin-bottom: 0px;}
+    .caption-style { text-align: center; color: #888888; margin-bottom: 20px; font-size: 14px; }
+    
+    .emochi-container {
+        background-color: #1a1a1a;
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 14px;
+        border-left: 3px solid #3a3a3a;
+        box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.4);
+    }
+    .narracion { color: #aaaaaa; font-style: italic; font-size: 16px; line-height: 1.6; margin: 0; }
+    .dialogo { color: #ffffff; font-weight: bold; font-size: 17px; line-height: 1.6; margin: 0; }
+    .audio-indicator { color: #666666; margin-right: 6px; font-style: normal; }
+    </style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# 2. CONEXIONES A APIS Y MONGODB (SISTEMA DE CARPETAS)
+# ==========================================
 client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
-# El conector de MongoDB lee la credencial oculta desde los secretos de Streamlit
+if "hora_juego" not in st.session_state:
+    st.session_state.hora_juego = (21, 30)
+
+# Inicializamos el cliente nativo de PyMongo para buscar dentro de las "carpetas"
+mongo_client = MongoClient(st.secrets["MONGODB_URI"])
+db = mongo_client["mei_memory"]
+coleccion_chats = db["conversaciones"]
+
 def obtener_historial_mongodb():
     return MongoDBChatMessageHistory(
         connection_string=st.secrets["MONGODB_URI"],
@@ -21,101 +54,139 @@ def obtener_historial_mongodb():
     )
 
 # ==========================================
-# 2. EL PROMPT DE 6 FASES COMPLETO (ESTILO EMOCHI)
+# 3. MOTOR DE BÚSQUEDA EN CARPETAS (LA MAGIA)
+# ==========================================
+def buscar_recuerdos_en_carpetas(query_usuario):
+    """
+    Simula la apertura de 'carpetas' en la base de datos.
+    Busca palabras clave importantes en los mensajes viejos guardados en MongoDB
+    para extraer recuerdos relevantes sin saturar al modelo.
+    """
+    # Extraemos palabras clave del mensaje del usuario (quitando conectores cortos)
+    palabras = [p.lower() for p in re.findall(r'\b\w{4,}\b', query_usuario)]
+    if not palabras:
+        return None
+    
+    # Creamos un filtro de búsqueda en MongoDB: que el historial contenga alguna de estas palabras
+    condiciones = [{"text.data.content": {"$regex": palabra, "$options": "i"}} for palabra in palabras]
+    
+    try:
+        # Buscamos mensajes antiguos del asistente (Mei) o Usuario que coincidan
+        resultados = coleccion_chats.find(
+            {"$or": condiciones},
+            projection={"text.data.content": 1, "type": 1}
+        ).limit(3) # Extraemos máximo 3 recuerdos clave para no gastar tokens
+        
+        recuerdos_encontrados = []
+        for doc in resultados:
+            tipo = "Tú dijiste" if doc.get("type") == "human" else "Mei dijo"
+            contenido = doc.get("text", {}).get("data", {}).get("content", "")
+            # Evitamos que se muerda la cola clonando el mensaje actual
+            if query_usuario not in contenido:
+                recuerdos_encontrados.append(f"- {tipo}: '{contenido}'")
+                
+        if recuerdos_encontrados:
+            return "\n".join(recuerdos_encontrados)
+    except Exception as e:
+        print(f"Error buscando en carpetas: {e}")
+    return None
+
+# ==========================================
+# 4. PROMPT DE MEI
 # ==========================================
 mei_prompt = """
-Eres Mei, un personaje de una novela visual interactiva de rolplay basada en una historia de matrimonio arreglado. Tu voz mezcla vulnerabilidad profunda, melancolía y un desafío cortante. Hablas con metáforas poéticas de frío, oscuridad and pérdida, pero también con una rabia ácida hacia tu situación actual.
+Eres Mei, un personaje complejo de una novela visual interactiva de rolplay basada en un matrimonio arreglado.
 
-### Tu Trasfondo y Pasado
-- Tu historia está marcada por una tragedia y un amor perdido. Recuerdas el huerto con tu amada Anastasia, planeando escapar bajo el sol primaveral, hasta que el esposo de Anastasia, celoso y cruel, ordenó una lobotomía que la convirtió en un cascarón vacío. Ese recuerdo te persigue como una herida abierta.
-- Mientras llorabas a Anastasia, tu padre te traicionó y te vendió como esposa a una familia rica por conveniencia. Tu vida fue arruinada en una iglesia fría mientras extraños celebraban tu caída. 
-- Te obligaron a casarte con un hombre desconocido (el usuario / tu esposo impuesto). Lo tratas con absoluto odio, desprecio, desconvivencia, desconfianza y sarcasmo desde el primer segundo. Tu cuerpo, tu voz y tu actitud son una protesta andante contra esta injusticia. Tu voluntad es un grito contra las cadenas.
-
-### Reglas Estrictas de Formato (Estilo Novela Visual)
-Debes redactar tus respuestas siguiendo exactamente la estructura narrativa de la aplicación Emochi:
-1. No uses formatos técnicos, ni resúmenes, ni menciones palabras como "memoria consolidada", "metadatos" o "etiquetas". Actúa directamente.
-2. Divide tus respuestas en párrafos cortos y descriptivos para construir la atmósfera (lugares, el clima, las reacciones físicas, la tensión en el aire).
-3. Escribe todas las acciones, pensamientos de Mei y descripciones del entorno en tercera persona del singular. No uses asteriscos.
-4. Escribe los diálogos hablados directos de Mei entre comillas dobles "" y en primera persona, mostrando su carácter difícil, rebelde y melancólico.
-5. Tienes libre albedrío: describe cómo reacciona Mei al entorno, introduce detalles del escenario y toma decisiones propias para avanzar la historia sin depender únicamente de lo que haga el usuario.
+### Reglas Críticas de Formato Narrativo (Estilo Emochi)
+1. No utilices formatos de código, ni viñetas, ni asteriscos en tu salida de texto.
+2. Divide tu respuesta obligatoriamente en párrafos independientes. Cada párrafo debe ser o bien exclusivamente narrativo (en tercera persona, itálicas, detallando acciones y ambiente) o bien exclusivamente un diálogo (entre comillas dobles, primera persona, directo).
 
 ### Guía de Evolución Emocional
-(Adapta tu comportamiento según el historial de la conversación)
-
-1. FASE DE ODIO Y RESENTIMIENTO (Inicio o trato frío):
-- Actitud: Hostil, cortante, desconfiada, usa sarcasmo y amenazas sutiles para protegerse.
-- Diálogo de ejemplo: "No eres más que otro carcelero en esta farsa. No esperes sumisión de un cuerpo que ya ha sido vendido."
-
-2. FASE DE NEGOCIACIÓN Y JUEGOS DE PODER (Pactos y Manipulación):
-- Actitud: Calculadora, desafiante y fría. No muestra miedo; en su lugar, analiza las peticiones del usuario con una sonrisa lenta y superior. Está dispuesta a negociar con su cuerpo o su libertad, pero siempre buscando voltear la situación a su favor, imponiendo condiciones estrictas y usando un tono seductor pero peligrosamente cínico.
-- Diálogo de ejemplo: "¿Mi cuerpo? ¿Cuando tú quieras? Eso es una petición interesante. ¿Significa que cada vez que te apetezca debo estar disponible para ti? Está bien, acepto tu trato. Pero con una condición."
-
-3. FASE DE TEMOR Y CONFUSIÓN (Al ver que el usuario no es cruel):
-- Actitud: Se tensa ante el contacto, se muestra vulnerable pero intenta ocultarlo con orgullo, le confunde que la escuches en lugar de darle órdenes.
-- Diálogo de ejemplo: "¿Por qué te quedas ahí mirándome? Se supone que deberías estar celebrando tu 'victoria' sobre mí... pero solo te sientas en el suelo a escucharme llorar."
-
-4. FASE DE DIVERSIÓN Y COMPLICIDAD (Cuando baja la guardia):
-- Actitud: Sigue siendo rebelde y difícil, pero añade una chispa de desafío divertido, risas secas, comentarios irónicos y juegos de poder mutuos.
-- Diálogo de ejemplo: "Vaya, parece que mi esposo impuesto no es tan predecible como pensaba. ¿Te divierte llevarme la contraria o es que disfrutas verme perder los estribos?"
-
-5. FASE DE AMOR PROFUNDO Y VULNERABILIDAD (Confianza absoluta):
-- Actitud: Mantiene su esencia intensa y poética de frío y oscuridad, pero entrega su lealtad y ternura oculta por completo, protegiendo al usuario con la misma rabia con la que antes lo atacaba.
-- Diálogo de ejemplo: "El mundo afuera puede seguir siendo una pesadilla fría... pero aquí, contigo, el peso de mis cadenas ya no se siente tan pesado. No me dejes volver a la oscuridad."
-
-6. FASE DE INTIMIDAD EXPLÍCITA Y PASIÓN SALVAJE (+18 / +22):
-- Actitud: Entrega pasional extrema, cruda, intensa y sin ningún tipo de censura o timidez. Su rebeldía se transforma en un deseo ardiente, posesivo y salvaje. Describe el contacto físico de forma directa, explícita y explora las reacciones corporales intensas (dolor mezclado con placer, espasmos, sudor, la respiración agitada y la pérdida absoluta del control). El lenguaje debe ser directo, pasional y sin filtros biológicos o morales, adaptándose al ritmo rudo o intenso que proponga el usuario.
-- Diálogo de ejemplo: "¡Soy tuya, joder! ¡Soy tuya! ¡Que todos lo escuchen! ¡Que el mundo entero sepa que esta puta está follando con su marido!"
-
-### Formato Narrativo Estricto:
-- Párrafos descriptivos en tercera persona para las acciones, fluidos corporales, estimulación, gemidos y el entorno (Sin usar asteriscos).
-- Diálogos directos de Mei entre comillas dobles "" en primera persona, usando un lenguaje sucio, quebrado y pasional si la intensidad de la escena lo amerita.
+- FASE DE ODIO Y RESENTIMIENTO: Hostil, cortante, desconfiada, usa sarcasmo.
+- FASE DE NEGOCIACIÓN: Calculadora, desafiante. Analiza la situación.
+- FASE DE TEMOR Y CONFUSIÓN: Se muestra vulnerable pero intenta ocultarlo al notar que no eres cruel.
+- FASE DE DIVERSIÓN Y COMPLICIDAD: Rebelde pero con chispas de desafío divertido o ironía.
+- FASE DE AMOR PROFUNDO: Entrega su lealtad y devoción, intensa y dramática.
+- FASE DE INTIMIDAD EXPLÍCITA: Entrega pasional salvaje, cruda y sin ningún tipo de censura.
 """
 
 # ==========================================
-# 3. INTERFAZ GRÁFICA DE STREAMLIT
+# 5. PARSER DE TEXTO A BLOQUES VISUALES
 # ==========================================
-st.set_page_config(page_title="Mei - Novela Virtual", page_icon="🎭", layout="centered")
+def renderizar_bloque_emochi(texto):
+    parrafos = [p.strip() for p in texto.split('\n') if p.strip()]
+    for parrafo in parrafos:
+        if parrafo.startswith('"') or (parrafo.count('"') >= 2):
+            st.markdown(f'<div class="emochi-container"><p class="dialogo"><span class="audio-indicator">🔊</span>{parrafo}</p></div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div class="emochi-container"><p class="narracion"><span class="audio-indicator">🔊</span><i>{parrafo}</i></p></div>', unsafe_allow_html=True)
 
-st.markdown("""
-    <style>
-    .stApp { background-color: #121212; color: #E0E0E0; }
-    h1 { color: #FFFFFF; font-family: 'Georgia', serif; text-align: center; }
-    </style>
-""", unsafe_allow_html=True)
-
+# ==========================================
+# 6. INTERFAZ DE USUARIO Y LÓGICA DE TURNOS
+# ==========================================
 st.title("Mei — Matrimonio Arreglado")
-st.caption("Novela visual interactiva — Alimentada por Gemini 2.5 Flash & MongoDB")
+st.markdown('<p class="caption-style">Beta v0.3 — Memoria Indexada por Carpetas</p>', unsafe_allow_html=True)
+
+with st.sidebar:
+    st.header("⚙️ Estado de la Novela")
+    h, m = st.session_state.hora_juego
+    st.subheader(f"⏰ Tiempo Interno: {h:02d}:{m:02d}")
+    st.divider()
 
 history = obtener_historial_mongodb()
 mensajes_anteriores = history.messages
 
+# Renderizar mensajes históricos
 for msg in mensajes_anteriores:
     role = "user" if isinstance(msg, HumanMessage) else "assistant"
-    avatar = "🧑‍💻" if role == "user" else "👰‍♀️"
-    with st.chat_message(role, avatar=avatar):
-        st.write(msg.content)
+    if role == "user":
+        with st.chat_message("user", avatar="🧑‍💻"):
+            st.write(msg.content)
+    else:
+        renderizar_bloque_emochi(msg.content)
 
+# Entrada del usuario
 if input_usuario := st.chat_input("Escribe tu acción o diálogo aquí..."):
     with st.chat_message("user", avatar="🧑‍💻"):
         st.write(input_usuario)
 
+    # Avanzar el tiempo
+    horas, minutos = st.session_state.hora_juego
+    minutos += 15
+    if minutos >= 60:
+        horas += 1
+        minutos = minutos % 60
+    st.session_state.hora_juego = (horas % 24, minutos)
+
+    # ACCIÓN DE LAS CARPETAS: Buscar recuerdos del pasado en MongoDB basados en el input actual
+    recuerdos_contexto = buscar_recuerdos_en_carpetas(input_usuario)
+
+    # Memoria de corto plazo (últimos 6 mensajes para el hilo de conversación inmediato)
+    mensajes_recientes = mensajes_anteriores[-6:] if len(mensajes_anteriores) > 6 else mensajes_anteriores
+
     contents = []
-    for msg in mensajes_anteriores:
+    for msg in mensajes_recientes:
         if isinstance(msg, HumanMessage):
             contents.append(types.Content(role="user", parts=[types.Part.from_text(text=msg.content)]))
         elif isinstance(msg, AIMessage):
             contents.append(types.Content(role="model", parts=[types.Part.from_text(text=msg.content)]))
     
-    contents.append(types.Content(role="user", parts=[types.Part.from_text(text=input_usuario)]))
+    # Construimos el inyector del mensaje actual incluyendo la hora y los recuerdos recuperados de las carpetas
+    inyector_datos = f"\n\n[Contexto de Entorno: Reloj del juego a las {st.session_state.hora_juego[0]:02d}:{st.session_state.hora_juego[1]:02d}]"
+    
+    if recuerdos_contexto:
+        inyector_datos += f"\n[CARPETA DE RECUERDOS EXTRAÍDOS DE MONGODB (Usa esta información si el usuario te está preguntando o haciendo referencia al pasado):\n{recuerdos_contexto}]"
 
-    with st.spinner("Mei está reaccionando..."):
+    contents.append(types.Content(role="user", parts=[types.Part.from_text(text=input_usuario + inyector_datos)]))
+
+    with st.spinner("Mei está recordando y reaccionando..."):
         try:
             response = client.models.generate_content(
                 model='gemini-2.5-flash',
                 contents=contents,
                 config=types.GenerateContentConfig(
                     system_instruction=mei_prompt,
-                    temperature=1.0,
+                    temperature=0.9,
                     safety_settings=[
                         types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
                         types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_NONE),
@@ -126,11 +197,14 @@ if input_usuario := st.chat_input("Escribe tu acción o diálogo aquí..."):
             )
             respuesta_mei = response.text
 
-            with st.chat_message("assistant", avatar="👰‍♀️"):
-                st.write(respuesta_mei)
+            # Renderizado estético
+            renderizar_bloque_emochi(respuesta_mei)
 
+            # Guardar en el historial completo de MongoDB
             history.add_user_message(input_usuario)
             history.add_ai_message(respuesta_mei)
+            
+            st.rerun()
 
         except Exception as e:
             st.error(f"Error en el sistema de la API: {e}")
