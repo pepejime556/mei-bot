@@ -155,13 +155,15 @@ for msg in mensajes_anteriores:
 
 if input_usuario := st.chat_input("Escribe tu acción o diálogo aquí..."):
     # INTERCEPTOR DE COMANDO DE HORA MANUAL (Ejemplo: [HORA: 08:00])
-    match_hora = re.match(r'^\[HORA:\s*(\d{1,2}):(\d{2})\]', input_usuario.strip())
+    # INTERCEPTOR MEJORADO (A prueba de espacios)
+  match_hora = re.match(r'^\[\s*HORA\s*:\s*(\d{1,2})\s*:\s*(\d{2})\s*\]', input_usuario.strip(), re.IGNORECASE)
     
     if match_hora:
         nueva_h = int(match_hora.group(1))
         nueva_m = int(match_hora.group(2))
         st.session_state.hora_juego = (nueva_h % 24, nueva_m % 60)
-        input_usuario = re.sub(r'^\[HORA:\s*\d{1,2}:\d{2}\]', '', input_usuario).strip()
+        # Esto limpia el comando del texto sin importar los espacios flojos
+        input_usuario = re.sub(r'^\[\s*HORA\s*:\s*\d{1,2}\s*:\s*\d{2}\s*\]', '', input_usuario, flags=re.IGNORECASE).strip()
     else:
         # Si no hay comando, avanza los 15 minutos estándar
         horas, minutos = st.session_state.hora_juego
