@@ -242,9 +242,9 @@ else:
     
     inyector_datos = f"\n\n[Contexto: Reloj del juego a las {st.session_state.hora_juego[0]:02d}:{st.session_state.hora_juego[1]:02d}]"
     if recuerdos_contexto:
-      # Convertimos ambas variables a texto de forma segura antes de unirlas
-    texto_final = str(input_usuario or "") + str(inyector_datos or "")
-    contents.append(types.Content(role="user", parts=[types.Part.from_text(text=texto_final)]))
+  # Convertimos ambas variables a texto de forma segura antes de unirlas
+        texto_final = str(input_usuario or "") + str(inyector_datos or "")
+        contents.append(types.Content(role="user", parts=[types.Part.from_text(text=texto_final)]))
             response = client.models.generate_content(
                 model='gemini-2.5-flash',
                 contents=contents,
