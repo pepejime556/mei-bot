@@ -242,14 +242,9 @@ else:
     
     inyector_datos = f"\n\n[Contexto: Reloj del juego a las {st.session_state.hora_juego[0]:02d}:{st.session_state.hora_juego[1]:02d}]"
     if recuerdos_contexto:
-        inyector_datos += f"\n[CARPETA DE RECUERDOS RELEVANTES EXTRAÍDOS DE MONGODB:\n{recuerdos_contexto}]"
-
-  # Convertimos ambas variables a texto de forma segura antes de unirlas
+      # Convertimos ambas variables a texto de forma segura antes de unirlas
     texto_final = str(input_usuario or "") + str(inyector_datos or "")
     contents.append(types.Content(role="user", parts=[types.Part.from_text(text=texto_final)]))
-   contents.append(types.Content(role="user", parts=[types.Part.from_text(text=texto_final)]))
-    with st.spinner("Mei está reaccionando..."):
-        try:
             response = client.models.generate_content(
                 model='gemini-2.5-flash',
                 contents=contents,
