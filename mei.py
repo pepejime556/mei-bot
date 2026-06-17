@@ -8,7 +8,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from pymongo import MongoClient
 
 # ==========================================
-# 1. CONFIGURACIÓN DE PÁGINA Y ESTÉTIICA (EMOCHI STYLE)
+# 1. CONFIGURACIÓN DE PÁGINA Y ESTÉTICA (EMOCHI STYLE)
 # ==========================================
 st.set_page_config(page_title="Mei - Novela Virtual", page_icon="🎭", layout="centered")
 
@@ -37,12 +37,9 @@ st.markdown("""
 # ==========================================
 client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
-
-
 # Inicializamos el cliente nativo de PyMongo para buscar dentro de las "carpetas"
 mongo_client = MongoClient(st.secrets["MONGODB_URI"])
 db = mongo_client["mei_memory"]
-coleccion_chats = db["conversaciones"]
 coleccion_chats = db["conversaciones"]
 
 # --- CONFIGURACIÓN DE LA PARTIDA GUARDADA ---
@@ -85,7 +82,6 @@ def obtener_historial_mongodb():
 # 3. MOTOR DE BÚSQUEDA EN CARPETAS
 # ==========================================
 def buscar_recuerdos_en_carpetas(query_usuario):
-    # ESCUDO PROTECTOR: Si la variable no tiene texto o no es un string válido, frena el colapso
     if not query_usuario or not isinstance(query_usuario, str):
         return []
     
@@ -201,34 +197,6 @@ if input_usuario := st.chat_input("Escribe tu acción o diálogo aquí..."):
     # Incremento natural de necesidades físicas por el paso del tiempo
     st.session_state.hambre = min(100, st.session_state.hambre + 3)
     st.session_state.sueño = min(100, st.session_state.sueño + 3)
-    # --- CONFIGURACIÓN DE MONGODB (Colocar esto debajo de coleccion_chats) ---
-# Intentamos buscar si ya hay un estado de partida guardado en la base de datos
-partida_guardada = coleccion_chats.find_one({"_id": "estado_partida_mei"})
-
-if partida_guardada:
-    # Si existe una partida anterior en MongoDB, cargamos esos datos exactos
-    if "hora_juego" not in st.session_state:
-        st.session_state.hora_juego = tuple(partida_guardada.get("hora_juego", [21, 30]))
-    if "confianza" not in st.session_state:
-        st.session_state.confianza = partida_guardada.get("confianza", 15)
-    if "animo" not in st.session_state:
-        st.session_state.animo = partida_guardada.get("animo", 30)
-    if "hambre" not in st.session_state:
-        st.session_state.hambre = partida_guardada.get("hambre", 20)
-    if "sueño" not in st.session_state:
-        st.session_state.sueño = partida_guardada.get("sueño", 10)
-else:
-    # Si es un jugador completamente nuevo sin datos en MongoDB, usamos los valores base
-    if "hora_juego" not in st.session_state:
-        st.session_state.hora_juego = (21, 30)
-    if "confianza" not in st.session_state:
-        st.session_state.confianza = 15
-    if "animo" not in st.session_state:
-        st.session_state.animo = 30
-    if "hambre" not in st.session_state:
-        st.session_state.hambre = 20
-    if "sueño" not in st.session_state:
-        st.session_state.sueño = 10
 
     recuerdos_contexto = buscar_recuerdos_en_carpetas(input_usuario)
     mensajes_recientes = mensajes_anteriores[-6:] if len(mensajes_anteriores) > 6 else mensajes_anteriores
@@ -243,7 +211,10 @@ else:
     
     inyector_datos = f"\n\n[Contexto: Reloj del juego a las {st.session_state.hora_juego[0]:02d}:{st.session_state.hora_juego[1]:02d}]"
     if recuerdos_contexto:
-# Bloque con sangría profunda (8 espacios) para entrar dentro del if
+        inyector_datos += f"\n[Recuerdos extraídos de conversaciones pasadas:\n{recuerdos_contexto}]"
+
+    try:
+        # Convertimos ambas variables a texto de forma segura antes de unirlas
         texto_final = str(input_usuario or "") + str(inyector_datos or "")
         contents.append(types.Content(role="user", parts=[types.Part.from_text(text=texto_final)]))
 
@@ -261,14 +232,35 @@ else:
                 ]
             )
         )
-          coleccion_chats = db["conversaciones"]
 
-# --- CONFIGURACIÓN DE LA PARTIDA GUARDADA ---
-partida_guardada = coleccion_chats.find_one({"_id": "estado_partida_mei"})
+        respuesta_mei = response.text
 
-if partida_guardada:
-            st.rerun()
+        # Extracción y actualización de los puntos de estadísticas de Mei
+        match_puntos = re.search(r'\[PUNTOS:\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*\]', respuesta_mei)
+        if match_puntos:
+            st.session_state.confianza = max(0, min(100, st.session_state.confianza + int(match_puntos.group(1))))
+            st.session_state.animo = max(0, min(100, st.session_state.animo + int(match_puntos.group(2))))
+            st.session_state.hambre = max(0, min(100, st.session_state.hambre + int(match_puntos.group(3))))
+            st.session_state.sueño = max(0, min(100, st.session_state.sueño + int(match_puntos.group(4))))
 
-        except Exception as e:
-            # ESCUDO ANTI-CAÍDAS: Si Google se satura, el juego no se rompe
-            st.warning("⚠️ Los servidores de la API están saturados en este milisegundo. Mei se quedó pensativa. Intenta enviarle tu acción nuevamente.")
+            # GUARDAR EN MONGODB: Sincroniza el estado actual en la base de datos
+            coleccion_chats.update_one(
+                {"_id": "estado_partida_mei"},
+                {"$set": {
+                    "hora_juego": list(st.session_state.hora_juego),
+                    "confianza": st.session_state.confianza,
+                    "animo": st.session_state.animo,
+                    "hambre": st.session_state.hambre,
+                    "sueño": st.session_state.sueño
+                }},
+                upsert=True
+            )
+
+        renderizar_bloque_emochi(respuesta_mei)
+
+        history.add_user_message(input_usuario)
+        history.add_ai_message(respuesta_mei)
+        st.rerun()
+
+    except Exception as e:
+        st.warning("⚠️ Los servidores de la API están saturados en este milisegundo. Mei se quedó pensativa. Intenta enviarle tu acción nuevamente.")
