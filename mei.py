@@ -243,22 +243,24 @@ else:
     inyector_datos = f"\n\n[Contexto: Reloj del juego a las {st.session_state.hora_juego[0]:02d}:{st.session_state.hora_juego[1]:02d}]"
     if recuerdos_contexto:
   # Convertimos ambas variables a texto de forma segura antes de unirlas
-        texto_final = str(input_usuario or "") + str(inyector_datos or "")
-        contents.append(types.Content(role="user", parts=[types.Part.from_text(text=texto_final)]))
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=mei_prompt,
-                    temperature=0.9,
-                    safety_settings=[
-                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-                    ]
-                ),
-            )
+      # Bloque limpio y perfectamente alineado
+    texto_final = str(input_usuario or "") + str(inyector_datos or "")
+    contents.append(types.Content(role="user", parts=[types.Part.from_text(text=texto_final)]))
+
+    response = client.models.generate_content(
+        model='gemini-2.5-flash',
+        contents=contents,
+        config=types.GenerateContentConfig(
+            system_instruction=mei_prompt,
+            temperature=0.9,
+            safety_settings=[
+                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+            ]
+        )
+    )
             respuesta_mei = response.text
 
             # PARSER: Leer los 4 parámetros numéricos devueltos por Mei
