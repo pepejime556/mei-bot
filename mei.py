@@ -37,12 +37,18 @@ st.markdown("""
 # ==========================================
 client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
-# --- CONFIGURACIÓN DE MONGODB (Colocar esto debajo de coleccion_chats) ---
-# Intentamos buscar si ya hay un estado de partida guardado en la base de datos
 
+
+# Inicializamos el cliente nativo de PyMongo para buscar dentro de las "carpetas"
+mongo_client = MongoClient(st.secrets["MONGODB_URI"])
+db = mongo_client["mei_memory"]
+coleccion_chats = db["conversaciones"]
+partida_guardada = coleccion_chats.find_one({"_id": "estado_partida_mei"})
+# --- CONFIGURACIÓN DE LA PARTIDA GUARDADA (Mantenlo unido aquí abajo) ---
+partida_guardada = coleccion_chats.find_one({"_id": "estado_partida_mei"})
 
 if partida_guardada:
-    # Si existe una partida anterior en MongoDB, cargamos esos datos exactos
+    # Si existe en MongoDB, cargamos esos datos
     if "hora_juego" not in st.session_state:
         st.session_state.hora_juego = tuple(partida_guardada.get("hora_juego", [21, 30]))
     if "confianza" not in st.session_state:
@@ -54,7 +60,7 @@ if partida_guardada:
     if "sueño" not in st.session_state:
         st.session_state.sueño = partida_guardada.get("sueño", 10)
 else:
-    # Si es un jugador completamente nuevo sin datos en MongoDB, usamos los valores base
+    # Si no existe, valores por defecto iniciales
     if "hora_juego" not in st.session_state:
         st.session_state.hora_juego = (21, 30)
     if "confianza" not in st.session_state:
@@ -65,12 +71,6 @@ else:
         st.session_state.hambre = 20
     if "sueño" not in st.session_state:
         st.session_state.sueño = 10
-
-# Inicializamos el cliente nativo de PyMongo para buscar dentro de las "carpetas"
-mongo_client = MongoClient(st.secrets["MONGODB_URI"])
-db = mongo_client["mei_memory"]
-coleccion_chats = db["conversaciones"]
-partida_guardada = coleccion_chats.find_one({"_id": "estado_partida_mei"})
 
 def obtener_historial_mongodb():
     return MongoDBChatMessageHistory(
