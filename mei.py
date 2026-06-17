@@ -84,6 +84,10 @@ def obtener_historial_mongodb():
 # 3. MOTOR DE BÚSQUEDA EN CARPETAS
 # ==========================================
 def buscar_recuerdos_en_carpetas(query_usuario):
+    # ESCUDO PROTECTOR: Si la variable no tiene texto o no es un string válido, frena el colapso
+    if not query_usuario or not isinstance(query_usuario, str):
+        return []
+    
     palabras = [p.lower() for p in re.findall(r'\b\w{4,}\b', query_usuario)]
     if not palabras:
         return None
