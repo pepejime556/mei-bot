@@ -39,7 +39,7 @@ client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
 # --- CONFIGURACIÓN DE MONGODB (Colocar esto debajo de coleccion_chats) ---
 # Intentamos buscar si ya hay un estado de partida guardado en la base de datos
-partida_guardada = coleccion_chats.find_one({"_id": "estado_partida_mei"})
+
 
 if partida_guardada:
     # Si existe una partida anterior en MongoDB, cargamos esos datos exactos
@@ -70,6 +70,7 @@ else:
 mongo_client = MongoClient(st.secrets["MONGODB_URI"])
 db = mongo_client["mei_memory"]
 coleccion_chats = db["conversaciones"]
+partida_guardada = coleccion_chats.find_one({"_id": "estado_partida_mei"})
 
 def obtener_historial_mongodb():
     return MongoDBChatMessageHistory(
