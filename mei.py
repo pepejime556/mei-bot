@@ -43,8 +43,9 @@ client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 mongo_client = MongoClient(st.secrets["MONGODB_URI"])
 db = mongo_client["mei_memory"]
 coleccion_chats = db["conversaciones"]
-partida_guardada = coleccion_chats.find_one({"_id": "estado_partida_mei"})
-# --- CONFIGURACIÓN DE LA PARTIDA GUARDADA (Mantenlo unido aquí abajo) ---
+coleccion_chats = db["conversaciones"]
+
+# --- CONFIGURACIÓN DE LA PARTIDA GUARDADA ---
 partida_guardada = coleccion_chats.find_one({"_id": "estado_partida_mei"})
 
 if partida_guardada:
