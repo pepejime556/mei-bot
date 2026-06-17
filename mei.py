@@ -261,16 +261,12 @@ else:
                 ]
             )
         )
-            if match:
-                st.session_state.confianza = max(0, min(100, st.session_state.confianza + int(match.group(1))))
-                st.session_state.animo = max(0, min(100, st.session_state.animo + int(match.group(2))))
-                st.session_state.hambre = max(0, min(100, st.session_state.hambre + int(match.group(3))))
-                st.session_state.sueño = max(0, min(100, st.session_state.sueño + int(match.group(4))))
+          coleccion_chats = db["conversaciones"]
 
-            renderizar_bloque_emochi(respuesta_mei)
+# --- CONFIGURACIÓN DE LA PARTIDA GUARDADA ---
+partida_guardada = coleccion_chats.find_one({"_id": "estado_partida_mei"})
 
-            history.add_user_message(input_usuario)
-            history.add_ai_message(respuesta_mei)
+if partida_guardada:
             st.rerun()
 
         except Exception as e:
