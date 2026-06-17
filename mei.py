@@ -242,26 +242,24 @@ else:
     
     inyector_datos = f"\n\n[Contexto: Reloj del juego a las {st.session_state.hora_juego[0]:02d}:{st.session_state.hora_juego[1]:02d}]"
     if recuerdos_contexto:
-# Bloque con la sangría exacta requerida por el if de la línea 244
-    texto_final = str(input_usuario or "") + str(inyector_datos or "")
-    contents.append(types.Content(role="user", parts=[types.Part.from_text(text=texto_final)]))
+# Bloque con sangría profunda (8 espacios) para entrar dentro del if
+        texto_final = str(input_usuario or "") + str(inyector_datos or "")
+        contents.append(types.Content(role="user", parts=[types.Part.from_text(text=texto_final)]))
 
-    response = client.models.generate_content(
-        model='gemini-2.5-flash',
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=mei_prompt,
-            temperature=0.9,
-            safety_settings=[
-                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-            ]
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=mei_prompt,
+                temperature=0.9,
+                safety_settings=[
+                    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+                    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+                    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+                    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+                ]
+            )
         )
-    )
-            # PARSER: Leer los 4 parámetros numéricos devueltos por Mei
-            match = re.search(r'\[PUNTOS:\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*\]', respuesta_mei)
             if match:
                 st.session_state.confianza = max(0, min(100, st.session_state.confianza + int(match.group(1))))
                 st.session_state.animo = max(0, min(100, st.session_state.animo + int(match.group(2))))
