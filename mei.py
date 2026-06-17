@@ -154,15 +154,13 @@ for msg in mensajes_anteriores:
         renderizar_bloque_emochi(msg.content)
 
 if input_usuario := st.chat_input("Escribe tu acción o diálogo aquí..."):
-    # INTERCEPTOR DE COMANDO DE HORA MANUAL (Ejemplo: [HORA: 08:00])
-    # INTERCEPTOR MEJORADO (A prueba de espacios)
-      match_hora = re.match(r'^\[\s*HORA\s*:\s*(\d{1,2})\s*:\s*(\d{2})\s*\]', input_usuario.strip(), re.IGNORECASE)
+    # INTERCEPTOR MEJORADO (A prueba de espacios flojos)
+    match_hora = re.match(r'^\[\s*HORA\s*:\s*(\d{1,2})\s*:\s*(\d{2})\s*\]', input_usuario.strip(), re.IGNORECASE)
     
     if match_hora:
         nueva_h = int(match_hora.group(1))
         nueva_m = int(match_hora.group(2))
         st.session_state.hora_juego = (nueva_h % 24, nueva_m % 60)
-        # Esto limpia el comando del texto sin importar los espacios flojos
         input_usuario = re.sub(r'^\[\s*HORA\s*:\s*\d{1,2}\s*:\s*\d{2}\s*\]', '', input_usuario, flags=re.IGNORECASE).strip()
     else:
         # Si no hay comando, avanza los 15 minutos estándar
@@ -178,7 +176,7 @@ if input_usuario := st.chat_input("Escribe tu acción o diálogo aquí..."):
 
     # Incremento natural de necesidades físicas por el paso del tiempo
     st.session_state.hambre = min(100, st.session_state.hambre + 3)
-    st.session_state.sueño = min(100, st.session_state.sueño + 2)
+    st.session_state.sueño = min(100, st.session_state.sueño + 3)
 
     recuerdos_contexto = buscar_recuerdos_en_carpetas(input_usuario)
     mensajes_recientes = mensajes_anteriores[-6:] if len(mensajes_anteriores) > 6 else mensajes_anteriores
