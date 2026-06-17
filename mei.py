@@ -156,7 +156,7 @@ for msg in mensajes_anteriores:
 if input_usuario := st.chat_input("Escribe tu acción o diálogo aquí..."):
     # INTERCEPTOR DE COMANDO DE HORA MANUAL (Ejemplo: [HORA: 08:00])
     # INTERCEPTOR MEJORADO (A prueba de espacios)
-       match_hora = re.match(r'^\[\s*HORA\s*:\s*(\d{1,2})\s*:\s*(\d{2})\s*\]', input_usuario.strip(), re.IGNORECASE)
+      match_hora = re.match(r'^\[\s*HORA\s*:\s*(\d{1,2})\s*:\s*(\d{2})\s*\]', input_usuario.strip(), re.IGNORECASE)
     
     if match_hora:
         nueva_h = int(match_hora.group(1))
