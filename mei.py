@@ -242,8 +242,7 @@ else:
     
     inyector_datos = f"\n\n[Contexto: Reloj del juego a las {st.session_state.hora_juego[0]:02d}:{st.session_state.hora_juego[1]:02d}]"
     if recuerdos_contexto:
-  # Convertimos ambas variables a texto de forma segura antes de unirlas
-      # Bloque limpio y perfectamente alineado
+# Bloque con la sangría exacta requerida por el if de la línea 244
     texto_final = str(input_usuario or "") + str(inyector_datos or "")
     contents.append(types.Content(role="user", parts=[types.Part.from_text(text=texto_final)]))
 
@@ -261,8 +260,6 @@ else:
             ]
         )
     )
-            respuesta_mei = response.text
-
             # PARSER: Leer los 4 parámetros numéricos devueltos por Mei
             match = re.search(r'\[PUNTOS:\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*\]', respuesta_mei)
             if match:
