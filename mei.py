@@ -200,7 +200,7 @@ if input_usuario := st.chat_input("Escribe tu acción o diálogo aquí..."):
             minutos_transcurridos = minutos_nuevos_totales - minutos_viejos_totales
         else:
             # Cruzó la medianoche al siguiente día
-            minutos_transcurridos = (1440 - minutes_viejos_totales) + minutos_nuevos_totales
+            minutos_transcurridos = (1440 - minutos_viejos_totales) + minutos_nuevos_totales
     else:
         minutos_viejos += 15
         if minutos_viejos >= 60:
