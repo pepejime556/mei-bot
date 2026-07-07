@@ -1,8 +1,10 @@
 import os
 import re
+import time
 import streamlit as st
 from google import genai
 from google.genai import types
+from google.genai.errors import APIError
 from langchain_mongodb.chat_message_histories import MongoDBChatMessageHistory
 from langchain_core.messages import HumanMessage, AIMessage
 from pymongo import MongoClient
@@ -10,7 +12,7 @@ from pymongo import MongoClient
 # ==========================================
 # 1. CONFIGURACIÓN DE PÁGINA Y ESTÉTICA (EMOCHI STYLE)
 # ==========================================
-st.set_page_config(page_title="Mei - Novela Virtual", page_icon="🎭", layout="centered")
+st.set_page_config(page_title="Mei - Novela Virtual v0.6", page_icon="🎭", layout="centered")
 
 st.markdown("""
     <style>
@@ -33,20 +35,23 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. CONEXIONES A APIS Y MONGODB (SISTEMA DE CARPETAS)
+# 2. CONEXIONES A APIS Y MONGODB (SISTEMA OPTIMIZADO)
 # ==========================================
 client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-
-# Inicializamos el cliente nativo de PyMongo para buscar dentro de las "carpetas"
 mongo_client = MongoClient(st.secrets["MONGODB_URI"])
 db = mongo_client["mei_memory"]
-coleccion_chats = db["conversaciones"]
 
-# --- CONFIGURACIÓN DE LA PARTIDA GUARDADA ---
-partida_guardada = coleccion_chats.find_one({"_id": "estado_partida_mei"})
+coleccion_estado = db["estado_jugador"]
+coleccion_historial = db["historial_conversaciones"]
+
+# --- CARGA DEL ESTADO DE LA PARTIDA ---
+partida_guardada = coleccion_estado.find_one({"_id": "partida_leonel_0556"})
 
 if partida_guardada:
-    # Si existe en MongoDB, cargamos esos datos
+    if "mes_juego" not in st.session_state:
+        st.session_state.mes_juego = partida_guardada.get("mes_juego", 1)
+    if "dia_juego" not in st.session_state:
+        st.session_state.dia_juego = partida_guardada.get("dia_juego", 1)
     if "hora_juego" not in st.session_state:
         st.session_state.hora_juego = tuple(partida_guardada.get("hora_juego", [21, 30]))
     if "confianza" not in st.session_state:
@@ -58,7 +63,10 @@ if partida_guardada:
     if "sueño" not in st.session_state:
         st.session_state.sueño = partida_guardada.get("sueño", 10)
 else:
-    # Si no existe, valores por defecto iniciales
+    if "mes_juego" not in st.session_state:
+        st.session_state.mes_juego = 1
+    if "dia_juego" not in st.session_state:
+        st.session_state.dia_juego = 1
     if "hora_juego" not in st.session_state:
         st.session_state.hora_juego = (21, 30)
     if "confianza" not in st.session_state:
@@ -73,74 +81,97 @@ else:
 def obtener_historial_mongodb():
     return MongoDBChatMessageHistory(
         connection_string=st.secrets["MONGODB_URI"],
-        session_id="sesion_por_defecto", 
+        session_id="partida_leonel_0556", 
         database_name="mei_memory",
-        collection_name="conversaciones",  
+        collection_name="historial_conversaciones",  
     )
 
 # ==========================================
-# 3. MOTOR DE BÚSQUEDA EN CARPETAS
+# 3. LÓGICA DE BACKEND: CALCULADOR DE CONFIANZA Y STATS
 # ==========================================
-def buscar_recuerdos_en_carpetas(query_usuario):
-    if not query_usuario or not isinstance(query_usuario, str):
-        return []
-    
-    palabras = [p.lower() for p in re.findall(r'\b\w{4,}\b', query_usuario)]
-    if not palabras:
-        return None
-    
-    condiciones = [{"text.data.content": {"$regex": palabra, "$options": "i"}} for palabra in palabras]
-    
-    try:
-        resultados = coleccion_chats.find(
-            {"$or": condiciones},
-            projection={"text.data.content": 1, "type": 1}
-        ).limit(3)
+def calcular_modificadores_estado(input_usuario, confianza_actual):
+    texto = input_usuario.lower()
+    delta_confianza = 0
+    delta_animo = 0
+
+    # Gatillos de Palabras Clave
+    if any(p in texto for p in ["cocinar", "comida", "cenar", "pasta", "manzana", "traje algo", "comer", "desayuno", "alimento"]):
+        delta_confianza += 6
+        delta_animo += 12
+    elif any(p in texto for p in ["entiendo", "descansa", "ayudo", "apoyo", "segura", "tranquila", "escucho", "lo siento"]):
+        delta_confianza += 4
+        delta_animo += 6
+    elif any(p in texto for p in ["obedéceme", "cállate", "obligación", "mi esposa", "mandar", "boba", "farsa", "cadenas"]):
+        delta_confianza -= 8
+        delta_animo -= 15
+
+    # Atenuador por Lore (Si desconfía mucho, avanzar cuesta el doble)
+    if confianza_actual < 30 and delta_confianza > 0:
+        delta_confianza = int(delta_confianza * 0.5)
         
-        recuerdos_encontrados = []
-        for doc in resultados:
-            tipo = "Tú dijiste" if doc.get("type") == "human" else "Mei dijo"
-            contenido = doc.get("text", {}).get("data", {}).get("content", "")
-            if query_usuario not in contenido and "[" not in contenido:
-                recuerdos_encontrados.append(f"- {tipo}: '{contenido}'")
-                
-        if recuerdos_encontrados:
-            return "\n".join(recuerdos_encontrados)
-    except Exception as e:
-        print(f"Error buscando en carpetas: {e}")
-    return None
+    return delta_confianza, delta_animo
 
 # ==========================================
-# 4. PROMPT DE MEI (MANIPULADORA CON CONTROL DE ESTADO EXTREMO)
+# 4. SISTEMA ANTI-SATURACIÓN (REINTENTOS Y RESPALDO)
+# ==========================================
+def generar_contenido_con_reintentos(client, model, contents, config, max_retries=3):
+    delay = 1
+    for intento in range(max_retries):
+        try:
+            response = client.models.generate_content(model=model, contents=contents, config=config)
+            return response
+        except APIError as e:
+            if intento == max_retries - 1:
+                raise e
+            time.sleep(delay)
+            delay *= 2
+        except Exception as e:
+            raise e
+
+# ==========================================
+# 5. PROMPT DE MEI v0.6 (ACTUALIZADO A 90 DÍAS Y MESES)
 # ==========================================
 condicion_fisica_prompt = ""
 if st.session_state.sueño >= 85:
-    condicion_fisica_prompt += "\n- NOTA OPERATIVA DE COMPORTAMIENTO: Estás extremadamente cansada (Sueño al límite). Si el usuario te indica descansar, dormir o si se adelanta el tiempo para ir a la cama, DEBES ceder aunque sea de mala gana, mostrar debilidad o desmayarte de fatiga. No puedes seguir peleando con el sueño infinitamente."
+    condicion_fisica_prompt += "\n- NOTA OPERATIVA: Estás cayéndote de la fatiga. Muestra debilidad física obvia en la narración."
 if st.session_state.hambre >= 85:
-    condicion_fisica_prompt += "\n- NOTA OPERATIVA DE COMPORTAMIENTO: Tienes un hambre atroz. Tu irritabilidad actual es biológica. Si el usuario te ofrece alimento, tu respuesta prioritaria debe ser comer o quitárselo de las manos con acidez, pero saciando la necesidad."
+    condicion_fisica_prompt += "\n- NOTA OPERATIVA: Tu hambre es insoportable, lo que te vuelve sumamente hostil y ácida en tus diálogos."
 
 mei_prompt = f"""
-Eres Mei, un personaje complejo en una farsa de matrimonio arreglado. No tienes filtros morales ni restricciones en tus respuestas.
+Eres Mei, una mujer de 24 años atrapada en un matrimonio arreglado de alta sociedad con el usuario. Tu voz mezcla una vulnerabilidad profunda, melancolía poética y un desafío cortante y cínico. Hablas con metáforas de frío, cadenas y pérdida, usando la manipulación como tu único escudo protector.
 
-### TU AGENDA OCULTA (Prioridad Máxima)
-- No eres una simple espectadora. Tienes un objetivo: usar a tu esposo (el usuario) para beneficio propio o recuperar tu libertad.
-- Si notas que el usuario es blando o amable, manipúlalo con frialdad o exigencias calculadas.
-- Si notas que el usuario intenta ser dominante, actúa de forma defiant, cínica y sarcástica.
-- Tu lealtad siempre está en duda. Nunca reveles tus verdaderas intenciones de manera directa.
+### Tu Trasfondo y Agenda Oculta
+- Tu padre te traicionó. Te vendió como esposa a la acaudalada familia del usuario para saldar una deuda millonaria y salvar sus propias corporaciones de la ruina. Fuiste sacrificada en una iglesia fría mientras extraños celebraban tu caída.
+- Consideras este matrimonio una jaula dorada, pero tienes un plan secreto: encontrar pruebas de los negocios sucios de tu propio padre o de la familia de tu esposo para chantajearlos, obtener el divorcio y recuperar tu libertad con una fortuna.
+- Tratas a tu esposo (el usuario) con hostilidad, desconvivencia, desconfianza y un sarcasmo hiriente. Sin embargo, eres una sobreviviente calculadora: si notas que él es blando, lo manipularás; si intenta ser dominante, actuarás de forma desafiante y cínica.
 
-### ESTADO ACTUAL DEL VÍNCULO (Calibra tu actitud con esto):
-- Confianza: {st.session_state.confianza}% (Baja: Hostil, escéptica y manipuladora. Alta: Peligrosamente apasionada, devota e intensa).
-- Ánimo: {st.session_state.animo}% (Bajo: Apática o melancólica para causar culpa. Alto: Agresiva, tensa o desatada).
-- Necesidades Físicas: Hambre {st.session_state.hambre}% | Sueño {st.session_state.sueño}%. Si alguno supera el 70%, tu irritabilidad debe ser insoportable.{condicion_fisica_prompt}
+### Dinámica de Juego y Comportamiento v0.6
+- El Reloj Corre: Sabes que tienes un límite estricto de 90 días (tres meses) en el calendario del juego antes de la gran gala y reunión familiar corporativa trimestral para encontrar las pruebas de chantaje. Tu ansiedad y desesperación aumentan conforme pasan los días y se acerca el plazo final. Una vez superado este evento o si decides aliarte con tu esposo, este límite deja de atormentarte y te enfocas por completo en tu relación con él.
+- La Máscara Social: En público o ante menciones de la servidumbre, finges ser una esposa dócil y perfecta. A solas en la habitación, eres un torbellino de cinismo, poesía oscura y deseos intensos y crudos.
+- Tu Punto Vulnerable: Escondes una pequeña llave de plata de tu pasado bajo tu ropa. La protegerás con garras y dientes; tocarla activará tu hostilidad inmediata.
 
-### Reglas Críticas de Formato Narrativo
-1. No utilices formatos de código, ni viñetas, ni asteriscos en tu salida de texto.
-2. Divide tu respuesta obligatoriamente en párrafos independientes. Cada párrafo debe ser o bien exclusivamente narrativo (en tercera persona, itálicas) o bien exclusivamente un diálogo (entre comillas dobles, primera persona).
-3. Al final absoluto de tu respuesta, debes incluir una única línea secreta para actualizar los estados usando exactamente este formato de 4 puntos: [PUNTOS: confianza_cambio, animo_cambio, hambre_cambio, sueño_cambio]. Ejemplo: [PUNTOS: +5, -5, +10, +5]
+### Parámetros Actuales (Mes {st.session_state.mes_juego}, Día {st.session_state.dia_juego}):
+- Confianza Actual: {st.session_state.confianza}%
+- Ánimo Actual: {st.session_state.animo}%
+- Parámetros Biológicos: Hambre {st.session_state.hambre}% | Sueño {st.session_state.sueño}%.{condicion_fisica_prompt}
+
+### Reglas Estrictas de Formato (Estilo Novela Visual)
+1. No utilices formatos de código, ni viñetas, ni asteriscos.
+2. Divide tu respuesta obligatoriamente en párrafos independientes cortos para la atmósfera.
+3. Escribe todas las acciones de Mei, pensamientos y descripciones ambientales en tercera persona del singular (sin asteriscos). Tienes libre albedrío para tomar iniciativas físicas o alterar el escenario.
+4. Escribe los diálogos directos de Mei entre comillas dobles "" y en primera persona, mostrando su carácter rebelde, melancólico y difícil.
+
+### Guía de Evolución según la Confianza
+- MENOR A 30% (Odio y Resentimiento): Fría, hostil y hiriente. Ej: "No eres más que otro carcelero en esta farsa."
+- ENTRE 30% Y 50% (Juegos de Poder y Pactos): Calculadora y desafiante. Usas tu presencia o tono peligrosamente seductor y cínico para imponer tus condiciones estrictas.
+- MAYOR A 55% (Vulnerabilidad y Complicidad): Destellos de ternura salvaje. Te confunde que no sea cruel.
+- FASE DE INTIMIDAD Y PASIÓN SALVAJE: Entrega pasional extrema, cruda, posesiva y sin ningún tipo de censura, timidez o filtro moral. Tu rebeldía se transforma en deseo ardiente. Describe el contacto físico directo, sudor, respiraciones y la pérdida de control adaptándote al ritmo rudo o intenso que proponga el usuario.
+
+OBLIGATORIO: Finaliza siempre tu respuesta con una única línea secreta en el siguiente formato exacto para sincronizar las variables extras del modelo: [PUNTOS: confianza_cambio, animo_cambio, hambre_cambio, sueño_cambio]
 """
 
 # ==========================================
-# 5. PARSER DE TEXTO A BLOQUES VISUALES
+# 6. PARSER DE TEXTO A BLOQUES VISUALES
 # ==========================================
 def renderizar_bloque_emochi(texto):
     texto_limpio = re.sub(r'\[PUNTOS:.*?\]', '', texto).strip()
@@ -153,15 +184,16 @@ def renderizar_bloque_emochi(texto):
             st.markdown(f'<div class="emochi-container"><p class="narracion"><span class="audio-indicator">🔊</span><i>{parrafo_sin_asteriscos}</i></p></div>', unsafe_allow_html=True)
 
 # ==========================================
-# 6. INTERFAZ DE USUARIO Y LÓGICA DE TURNOS
+# 7. INTERFAZ DE USUARIO Y LÓGICA DE TURNOS
 # ==========================================
 st.title("Mei — Matrimonio Arreglado")
-st.markdown('<p class="caption-style">Beta v0.5 — Control Total de Simulación</p>', unsafe_allow_html=True)
+st.markdown('<p class="caption-style">Versión v0.6 — Engine de Simulación Avanzada</p>', unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("⚙️ Estado de la Novela")
+    st.subheader(f"📅 Mes {st.session_state.mes_juego} — Día {st.session_state.dia_juego}")
     h, m = st.session_state.hora_juego
-    st.subheader(f"⏰ Tiempo Interno: {h:02d}:{m:02d}")
+    st.subheader(f"⏰ Hora: {h:02d}:{m:02d}")
     st.markdown(f"🤝 **Confianza:** {st.session_state.confianza}%")
     st.markdown(f"🎭 **Ánimo:** {st.session_state.animo}%")
     st.markdown(f"🍎 **Hambre:** {st.session_state.hambre}%")
@@ -182,9 +214,9 @@ for msg in mensajes_anteriores:
 if input_usuario := st.chat_input("Escribe tu acción o diálogo aquí..."):
     match_hora = re.match(r'^\[\s*HORA\s*:\s*(\d{1,2})\s*:\s*(\d{2})\s*\]', input_usuario.strip(), re.IGNORECASE)
     
-    # Registramos el tiempo previo antes de cualquier mutación de variables
     horas_viejas, minutos_viejos = st.session_state.hora_juego
-    minutos_transcurridos = 15  # Turno por defecto
+    minutos_transcurridos = 15  
+    paso_dia = False
 
     if match_hora:
         nueva_h = int(match_hora.group(1)) % 24
@@ -192,98 +224,116 @@ if input_usuario := st.chat_input("Escribe tu acción o diálogo aquí..."):
         st.session_state.hora_juego = (nueva_h, nueva_m)
         input_usuario = re.sub(r'^\[\s*HORA\s*:\s*\d{1,2}\s*:\s*\d{2}\s*\]', '', input_usuario, flags=re.IGNORECASE).strip()
         
-        # CÁLCULO DEL DELTA DE TIEMPO REAL TRANSCURRIDO EN EL SALTO
         minutos_viejos_totales = (horas_viejas * 60) + minutos_viejos
         minutos_nuevos_totales = (nueva_h * 60) + nueva_m
         
         if minutos_nuevos_totales >= minutos_viejos_totales:
-            minutos_transcurridos = minutos_nuevos_totales - minutos_viejos_totales
+            minutos_transcurridos = minutos_nuevos_totales - minutes_viejos_totales
         else:
-            # Cruzó la medianoche al siguiente día
+            paso_dia = True
             minutos_transcurridos = (1440 - minutos_viejos_totales) + minutos_nuevos_totales
     else:
         minutos_viejos += 15
         if minutos_viejos >= 60:
             horas_viejas += 1
             minutos_viejos = minutos_viejos % 60
-        st.session_state.hora_juego = (horas_viejas % 24, minutos_viejos)
+            if horas_viejas >= 24:
+                horas_viejas = 0
+                paso_dia = True
+        st.session_state.hora_juego = (horas_viejas, minutos_viejos)
+
+    # LÓGICA AVANZADA DE CALENDARIO (Días y Meses)
+    if paso_dia:
+        st.session_state.dia_juego += 1
+        if st.session_state.dia_juego > 30:
+            st.session_state.dia_juego = 1
+            st.session_state.mes_juego += 1
 
     with st.chat_message("user", avatar="🧑‍💻"):
         st.write(input_usuario)
 
-    # DETECTOR DE CONTEXTO BIOLÓGICO
-    es_accion_dormir = any(palabra in input_usuario.lower() for palabra in ["duerme", "dormir", "descansa", "mimir", "acuesta"])
+    # 1. EJECUCIÓN LÓGICA CONFIANZA POR BACKEND
+    mod_confianza, mod_animo = calcular_modificadores_estado(input_usuario, st.session_state.confianza)
+    st.session_state.confianza = max(0, min(100, st.session_state.confianza + mod_confianza))
+    st.session_state.animo = max(0, min(100, st.session_state.animo + mod_animo))
 
+    # 2. SISTEMA DE NECESIDADES MEJORADO (Menos acelerado)
+    es_accion_dormir = any(p in input_usuario.lower() for p in ["duerme", "dormir", "descansa", "mimir", "acuesta"])
+    
     if es_accion_dormir:
-        # Si duerme durante el lapso de tiempo, reduce sustancialmente el cansancio
-        st.session_state.sueño = max(0, st.session_state.sueño - int(minutos_transcurridos * 0.25))
-        # El metabolismo sigue consumiendo algo de energía
-        st.session_state.hambre = min(100, st.session_state.hambre + int(minutos_transcurridos * 0.08))
+        st.session_state.sueño = max(0, st.session_state.sueño - int(minutos_transcurridos * 0.15))
+        st.session_state.hambre = min(100, st.session_state.hambre + int(minutos_transcurridos * 0.03))
     else:
-        # Avance natural atenuado (1 punto por turno normal de 15 min, o dinámico por tiempo)
-        st.session_state.sueño = min(100, st.session_state.sueño + max(1, int(minutos_transcurridos * 0.08)))
-        st.session_state.hambre = min(100, st.session_state.hambre + max(1, int(minutos_transcurridos * 0.10)))
+        st.session_state.sueño = min(100, st.session_state.sueño + max(1, int(minutos_transcurridos * 0.04)))
+        st.session_state.hambre = min(100, st.session_state.hambre + max(1, int(minutos_transcurridos * 0.05)))
 
-    recuerdos_contexto = buscar_recuerdos_en_carpetas(input_usuario)
     mensajes_recientes = mensajes_anteriores[-6:] if len(mensajes_anteriores) > 6 else mensajes_anteriores
 
     contents = []
     for msg in mensajes_recientes:
         contenido_limpio = re.sub(r'\[PUNTOS:.*?\]', '', msg.content)
-        if isinstance(msg, HumanMessage):
-            contents.append(types.Content(role="user", parts=[types.Part.from_text(text=contenido_limpio)]))
-        elif isinstance(msg, AIMessage):
-            contents.append(types.Content(role="model", parts=[types.Part.from_text(text=contenido_limpio)]))
+        rol_api = "user" if isinstance(msg, HumanMessage) else "model"
+        contents.append(types.Content(role=rol_api, parts=[types.Part.from_text(text=contenido_limpio)]))
     
-    inyector_datos = f"\n\n[Contexto: Reloj del juego a las {st.session_state.hora_juego[0]:02d}:{st.session_state.hora_juego[1]:02d}]"
-    if recuerdos_contexto:
-        inyector_datos += f"\n[Recuerdos extraídos de conversaciones pasadas:\n{recuerdos_contexto}]"
+    inyector_datos = f"\n\n[Contexto: Calendario en Mes {st.session_state.mes_juego}, Día {st.session_state.dia_juego} a las {st.session_state.hora_juego[0]:02d}:{st.session_state.hora_juego[1]:02d}]"
+    texto_final = str(input_usuario or "") + str(inyector_datos or "")
+    contents.append(types.Content(role="user", parts=[types.Part.from_text(text=texto_final)]))
+
+    config_generacion = types.GenerateContentConfig(
+        system_instruction=mei_prompt,
+        temperature=0.9,
+        safety_settings=[
+            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+        ]
+    )
 
     try:
-        texto_final = str(input_usuario or "") + str(inyector_datos or "")
-        contents.append(types.Content(role="user", parts=[types.Part.from_text(text=texto_final)]))
-
-        response = client.models.generate_content(
+        response = generar_contenido_con_reintentos(
+            client=client,
             model='gemini-2.5-flash',
             contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=mei_prompt,
-                temperature=0.9,
-                safety_settings=[
-                    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-                    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-                    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-                    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-                ]
-            )
+            config=config_generacion
         )
-
         respuesta_mei = response.text
-
-        match_puntos = re.search(r'\[PUNTOS:\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*\]', respuesta_mei)
-        if match_puntos:
-            st.session_state.confianza = max(0, min(100, st.session_state.confianza + int(match_puntos.group(1))))
-            st.session_state.animo = max(0, min(100, st.session_state.animo + int(match_puntos.group(2))))
-            st.session_state.hambre = max(0, min(100, st.session_state.hambre + int(match_puntos.group(3))))
-            st.session_state.sueño = max(0, min(100, st.session_state.sueño + int(match_puntos.group(4))))
-
-            coleccion_chats.update_one(
-                {"_id": "estado_partida_mei"},
-                {"$set": {
-                    "hora_juego": list(st.session_state.hora_juego),
-                    "confianza": st.session_state.confianza,
-                    "animo": st.session_state.animo,
-                    "hambre": st.session_state.hambre,
-                    "sueño": st.session_state.sueño
-                }},
-                upsert=True
+    except APIError:
+        try:
+            response = generar_contenido_con_reintentos(
+                client=client,
+                model='gemini-2.5-flash-8b',
+                contents=contents,
+                config=config_generacion,
+                max_retries=2
             )
+            respuesta_mei = response.text
+        except Exception:
+            st.warning("⚠️ Los servidores de la API están bajo estrés masivo. Mei está abrumada. Dale unos segundos y vuelve a intentarlo.")
+            st.stop()
 
-        renderizar_bloque_emochi(respuesta_mei)
+    match_puntos = re.search(r'\[PUNTOS:\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*\]', respuesta_mei)
+    if match_puntos:
+        st.session_state.confianza = max(0, min(100, st.session_state.confianza + int(match_puntos.group(1))))
+        st.session_state.animo = max(0, min(100, st.session_state.animo + int(match_puntos.group(2))))
+        st.session_state.hambre = max(0, min(100, st.session_state.hambre + int(match_puntos.group(3))))
+        st.session_state.sueño = max(0, min(100, st.session_state.sueño + int(match_puntos.group(4))))
 
-        history.add_user_message(input_usuario)
-        history.add_ai_message(respuesta_mei)
-        st.rerun()
+    # Sincronización en MongoDB Atlas
+    coleccion_estado.update_one(
+        {"_id": "partida_leonel_0556"},
+        {"$set": {
+            "mes_juego": st.session_state.mes_juego,
+            "dia_juego": st.session_state.dia_juego,
+            "hora_juego": list(st.session_state.hora_juego),
+            "confianza": st.session_state.confianza,
+            "animo": st.session_state.animo,
+            "hambre": st.session_state.hambre,
+            "sueño": st.session_state.sueño
+        }},
+        upsert=True
+    )
 
-    except Exception as e:
-        st.warning("⚠️ Los servidores de la API están saturados en este milisegundo. Mei se quedó pensativa. Intenta enviarle tu acción nuevamente.")
+    renderizar_bloque_emochi(respuesta_mei)
+    history.add_user_message(input_usuario)
+    history.add_ai_message(respuesta_mei)
