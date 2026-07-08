@@ -228,7 +228,7 @@ if input_usuario := st.chat_input("Escribe tu acción o diálogo aquí..."):
         minutos_nuevos_totales = (nueva_h * 60) + nueva_m
         
         if minutos_nuevos_totales >= minutos_viejos_totales:
-            minutos_transcurridos = minutos_nuevos_totales - minutes_viejos_totales
+            minutos_transcurridos = minutos_nuevos_totales - minutos_viejos_totales
         else:
             paso_dia = True
             minutos_transcurridos = (1440 - minutos_viejos_totales) + minutos_nuevos_totales
